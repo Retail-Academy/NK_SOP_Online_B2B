@@ -2,6 +2,10 @@
    - Option-first, deterministic
    - First screen: bilingual language selection
    - Then conversation locks to selected language (vi/en)
+
+   FIX:
+   - Do NOT stringify interactive DOM into innerHTML.
+   - Append option buttons as real DOM nodes so event listeners work.
 */
 
 const STATE = {
@@ -10,11 +14,19 @@ const STATE = {
   history: [],          // stack of { lang, nodeId }
 };
 
-// ---------- Bilingual Decision Tree Data ----------
+const DOM = {
+  chat: document.getElementById("chat"),
+  hint: document.getElementById("hint"),
+  langPill: document.getElementById("langPill"),
+  btnReset: document.getElementById("btnReset"),
+  btnBack: document.getElementById("btnBack"),
+};
+
+// ---------- Decision Tree ----------
 const TREE = {
   startNodeId: "lang_select",
   nodes: {
-    // 0) Language selection (BILINGUAL)
+    // Language selection (BILINGUAL question + bilingual options)
     lang_select: {
       type: "question",
       title: {
@@ -31,7 +43,7 @@ const TREE = {
       ],
     },
 
-    // 1) Main step selection (MONO-LANGUAGE after lang set)
+    // Main step selection
     n0: {
       type: "question",
       title: {
@@ -49,7 +61,7 @@ const TREE = {
       ],
     },
 
-    // ---------- LEAD ----------
+    // LEAD
     lead_1: {
       type: "result",
       title: { vi: "Lead & tư vấn", en: "Lead & consulting" },
@@ -73,7 +85,7 @@ const TREE = {
       links: [{ label: { vi: "Quay lại chọn bước", en: "Back to step selection" }, next: "n0" }],
     },
 
-    // ---------- PRICING ----------
+    // PRICING
     pricing_1: {
       type: "question",
       title: { vi: "Ngành hàng của đơn này là gì?", en: "Which category is this order under?" },
@@ -261,7 +273,7 @@ const TREE = {
       ],
     },
 
-    // ---------- ORDER ----------
+    // ORDER
     order_1: {
       type: "result",
       title: { vi: "Tạo đơn (Cs Cart → PDW)", en: "Create order (Cs Cart → PDW)" },
@@ -288,7 +300,7 @@ const TREE = {
       ],
     },
 
-    // ---------- FULFILLMENT ----------
+    // FULFILLMENT
     fulfill_1: {
       type: "question",
       title: { vi: "Khách xuất VAT loại nào?", en: "What VAT type does the customer need?" },
@@ -350,7 +362,7 @@ const TREE = {
       ],
     },
 
-    // ---------- RETURN ----------
+    // RETURN
     return_1: {
       type: "result",
       title: { vi: "Đổi/Trả", en: "Return/Exchange" },
@@ -377,7 +389,7 @@ const TREE = {
       ],
     },
 
-    // ---------- OVERDUE ----------
+    // OVERDUE
     overdue_1: {
       type: "result",
       title: { vi: "Đơn quá hạn (chưa giao/chưa thu tiền)", en: "Overdue orders (not delivered / not collected)" },
@@ -430,7 +442,7 @@ const TREE = {
       ],
     },
 
-    // ---------- CLOSE ----------
+    // CLOSE
     close_1: {
       type: "result",
       title: { vi: "Đóng giao dịch & lưu info CSKH", en: "Close deal & save info for customer care" },
@@ -456,16 +468,8 @@ const TREE = {
   },
 };
 
-// ---------- DOM ----------
-const chatEl = document.getElementById("chat");
-const hintEl = document.getElementById("hint");
-const langPillEl = document.getElementById("langPill");
-const btnReset = document.getElementById("btnReset");
-const btnBack = document.getElementById("btnBack");
-
-// ---------- Helpers ----------
-function t(obj) {
-  // Before language is set, we still allow bilingual content (fallback to vi)
+// ---------- i18n ----------
+function tr(obj) {
   const lang = STATE.lang || "vi";
   if (typeof obj === "string") return obj;
   if (!obj) return "";
@@ -475,104 +479,85 @@ function t(obj) {
 function setLang(lang) {
   STATE.lang = lang;
   document.documentElement.lang = lang === "vi" ? "vi" : "en";
-  langPillEl.textContent = lang === "vi" ? "Tiếng Việt" : "English";
-  hintEl.textContent = lang === "vi"
+  DOM.langPill.textContent = lang === "vi" ? "Tiếng Việt" : "English";
+  DOM.hint.textContent = lang === "vi"
     ? "Hãy chọn một lựa chọn để tiếp tục."
     : "Select an option to continue.";
 }
 
+// ---------- UI primitives ----------
 function scrollToBottom() {
-  chatEl.scrollTop = chatEl.scrollHeight;
+  DOM.chat.scrollTop = DOM.chat.scrollHeight;
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function el(tag, className, text) {
+  const e = document.createElement(tag);
+  if (className) e.className = className;
+  if (text !== undefined && text !== null) e.textContent = text;
+  return e;
 }
 
-function addMessage(role, text, extraHtml = "") {
-  const msg = document.createElement("div");
-  msg.className = `msg ${role}`;
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.innerHTML = escapeHtml(text).replace(/\n/g, "<br>") + extraHtml;
+function addMessage(role, text, extraNode = null) {
+  const msg = el("div", `msg ${role}`);
+  const bubble = el("div", "bubble");
+
+  // Put text with line breaks without innerHTML
+  const lines = String(text || "").split("\n");
+  lines.forEach((line, idx) => {
+    bubble.appendChild(document.createTextNode(line));
+    if (idx < lines.length - 1) bubble.appendChild(document.createElement("br"));
+  });
+
+  if (extraNode) bubble.appendChild(extraNode);
+
   msg.appendChild(bubble);
-  chatEl.appendChild(msg);
+  DOM.chat.appendChild(msg);
   scrollToBottom();
 }
 
-function wrapToHtml(el) {
-  const tmp = document.createElement("div");
-  tmp.appendChild(el);
-  return tmp.innerHTML;
-}
-
-// ---------- Rendering ----------
-function renderOptionsHtml(options) {
-  const wrap = document.createElement("div");
-  wrap.className = "options";
-
-  options.forEach((opt) => {
-    const btn = document.createElement("button");
-    btn.className = "opt";
+function buildOptions(options) {
+  const wrap = el("div", "options");
+  (options || []).forEach((opt) => {
+    const btn = el("button", "opt", tr(opt.label));
     btn.type = "button";
-    btn.textContent = t(opt.label);
     btn.addEventListener("click", () => onOptionSelected(opt));
     wrap.appendChild(btn);
   });
-
-  return wrapToHtml(wrap);
+  return wrap;
 }
 
-function renderLinksHtml(links) {
-  if (!links.length) return "";
-  const div = document.createElement("div");
-  div.className = "options";
-
-  links.forEach((lk) => {
-    const btn = document.createElement("button");
-    btn.className = "opt";
-    btn.type = "button";
-    btn.textContent = t(lk.label);
-    btn.addEventListener("click", () => gotoNode(lk.next, { asUser: false }));
-    div.appendChild(btn);
-  });
-
-  return `<div class="divider"></div>${wrapToHtml(div)}`;
-}
-
-function renderCardsHtml(cards) {
-  if (!cards.length) return "";
+function buildLinks(links) {
   const container = document.createElement("div");
-  container.className = "cards";
+  container.appendChild(el("div", "divider"));
+  container.appendChild(buildOptions(links.map(lk => ({
+    label: lk.label,
+    next: lk.next,
+    _isLink: true,
+  }))));
+  return container;
+}
 
-  cards.forEach((c) => {
-    const card = document.createElement("div");
-    card.className = "card";
-
-    const h3 = document.createElement("h3");
-    h3.textContent = t(c.title);
-    card.appendChild(h3);
+function buildCards(cards) {
+  const container = el("div", "cards");
+  (cards || []).forEach((c) => {
+    const card = el("div", "card");
+    card.appendChild(el("h3", null, tr(c.title)));
 
     const ul = document.createElement("ul");
-    const bullets = c.bullets ? t(c.bullets) : [];
+    const bullets = c.bullets ? tr(c.bullets) : [];
     (bullets || []).forEach((b) => {
       const li = document.createElement("li");
       li.textContent = b;
       ul.appendChild(li);
     });
-    card.appendChild(ul);
 
+    card.appendChild(ul);
     container.appendChild(card);
   });
-
-  return wrapToHtml(container);
+  return container;
 }
 
+// ---------- Render ----------
 function renderNode(nodeId) {
   const node = TREE.nodes[nodeId];
 
@@ -584,34 +569,38 @@ function renderNode(nodeId) {
     return;
   }
 
-  // Safety: if lang is not set but node is not lang_select, force back
+  // If language not set but node isn't language selector, force back.
   if (!STATE.lang && nodeId !== "lang_select") {
     STATE.nodeId = "lang_select";
     renderNode("lang_select");
     return;
   }
 
-  // Bot message (title + subtitle)
-  let header = t(node.title);
-  if (node.subtitle) header += `\n${t(node.subtitle)}`;
+  let header = tr(node.title);
+  if (node.subtitle) header += `\n${tr(node.subtitle)}`;
 
   if (node.type === "question") {
-    addMessage("bot", header, renderOptionsHtml(node.options || []));
-  } else if (node.type === "result") {
-    const cardsHtml = renderCardsHtml(node.cards || []);
-    const linksHtml = renderLinksHtml(node.links || []);
-    addMessage("bot", header, cardsHtml + linksHtml);
-  } else {
-    addMessage("bot", STATE.lang === "vi"
-      ? "Có lỗi cấu hình node. Vui lòng Reset."
-      : "Node configuration error. Please Reset."
-    );
+    const optionsNode = buildOptions(node.options || []);
+    addMessage("bot", header, optionsNode);
+    return;
   }
+
+  if (node.type === "result") {
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(buildCards(node.cards || []));
+    if (node.links && node.links.length) wrapper.appendChild(buildLinks(node.links));
+    addMessage("bot", header, wrapper);
+    return;
+  }
+
+  addMessage("bot", STATE.lang === "vi"
+    ? "Node cấu hình sai. Vui lòng Reset."
+    : "Node misconfigured. Please Reset."
+  );
 }
 
-// ---------- Navigation / State ----------
+// ---------- Navigation ----------
 function gotoNode(nextId, { asUser = true, userText = "" } = {}) {
-  // save previous state
   STATE.history.push({ lang: STATE.lang, nodeId: STATE.nodeId });
 
   if (asUser && userText) addMessage("user", userText);
@@ -621,37 +610,37 @@ function gotoNode(nextId, { asUser = true, userText = "" } = {}) {
 }
 
 function onOptionSelected(opt) {
-  // ---- Language selection (FIXED) ----
+  // LINK buttons (from result) behave like goto without user bubble
+  if (opt._isLink) {
+    gotoNode(opt.next, { asUser: false });
+    return;
+  }
+
+  // Language selection
   if (opt.setLang) {
     const chosenLabel = opt.setLang === "vi" ? "Tiếng Việt" : "English";
     addMessage("user", chosenLabel);
 
-    // 1) set language first
     setLang(opt.setLang);
 
-    // 2) move to next node
-    STATE.nodeId = opt.next;
-
-    // 3) record history AFTER language is set
-    STATE.history.push({ lang: STATE.lang, nodeId: STATE.nodeId });
-
-    // 4) render
-    renderNode(STATE.nodeId);
+    // Move to next node
+    gotoNode(opt.next, { asUser: false });
     return;
   }
 
-  // ---- Normal option ----
-  const userText = t(opt.label);
+  // Normal option
+  const userText = tr(opt.label);
   gotoNode(opt.next, { asUser: true, userText });
 }
 
+// ---------- Controls ----------
 function resetAll() {
-  chatEl.innerHTML = "";
+  DOM.chat.innerHTML = "";
   STATE.lang = null;
   STATE.nodeId = TREE.startNodeId;
   STATE.history = [];
-  langPillEl.textContent = "Not set";
-  hintEl.textContent = "Select an option to continue. / Hãy chọn một lựa chọn để tiếp tục.";
+  DOM.langPill.textContent = "Not set";
+  DOM.hint.textContent = "Select an option to continue. / Hãy chọn một lựa chọn để tiếp tục.";
   renderNode(STATE.nodeId);
 }
 
@@ -659,23 +648,21 @@ function goBack() {
   const prev = STATE.history.pop();
   if (!prev) return;
 
-  // Simple deterministic back: clear transcript & re-render current node
-  chatEl.innerHTML = "";
+  DOM.chat.innerHTML = "";
   STATE.lang = prev.lang;
   STATE.nodeId = prev.nodeId;
 
   if (STATE.lang) setLang(STATE.lang);
   else {
-    langPillEl.textContent = "Not set";
-    hintEl.textContent = "Select an option to continue. / Hãy chọn một lựa chọn để tiếp tục.";
+    DOM.langPill.textContent = "Not set";
+    DOM.hint.textContent = "Select an option to continue. / Hãy chọn một lựa chọn để tiếp tục.";
   }
 
   renderNode(STATE.nodeId);
 }
 
-// ---------- Events ----------
-btnReset.addEventListener("click", resetAll);
-btnBack.addEventListener("click", goBack);
+DOM.btnReset.addEventListener("click", resetAll);
+DOM.btnBack.addEventListener("click", goBack);
 
 // ---------- Start ----------
 resetAll();
