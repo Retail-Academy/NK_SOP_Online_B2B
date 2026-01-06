@@ -5,16 +5,16 @@
 */
 
 const STATE = {
-  lang: null,          // "vi" | "en"
+  lang: null,           // "vi" | "en"
   nodeId: "lang_select",
-  history: [],         // stack of { nodeId, lang, snapshot }
+  history: [],          // stack of { lang, nodeId }
 };
 
 // ---------- Bilingual Decision Tree Data ----------
 const TREE = {
   startNodeId: "lang_select",
   nodes: {
-    // 0) Language selection (BILINGUAL question + bilingual options)
+    // 0) Language selection (BILINGUAL)
     lang_select: {
       type: "question",
       title: {
@@ -31,7 +31,7 @@ const TREE = {
       ],
     },
 
-    // 1) Main step selection (monolingual after lang set)
+    // 1) Main step selection (MONO-LANGUAGE after lang set)
     n0: {
       type: "question",
       title: {
@@ -412,9 +412,9 @@ const TREE = {
           title: { vi: "Checklist", en: "Checklist" },
           bullets: {
             vi: [
-              "Kiểm tra lịch giao nhận, khu vực giao nhận, địa chỉ giao của khách.",
+              "Kiểm tra lịch giao nhận, khu vực giao nhận, địa chỉ giao của khách hàng.",
               "Nếu giao tại quầy: liên hệ khách lên trung tâm thanh toán.",
-              "Liên hệ kế toán để báo thu tiền vào đơn, tránh trạng thái quá hạn.",
+              "Liên hệ kế toán báo thu tiền vào đơn hàng tránh quá hạn.",
             ],
             en: [
               "Check delivery schedule, delivery area, and customer address.",
@@ -451,25 +451,25 @@ const TREE = {
           },
         },
       ],
-      links: [
-        { label: { vi: "Quay lại chọn bước", en: "Back to step selection" }, next: "n0" },
-      ],
+      links: [{ label: { vi: "Quay lại chọn bước", en: "Back to step selection" }, next: "n0" }],
     },
   },
 };
 
-// ---------- UI Rendering ----------
+// ---------- DOM ----------
 const chatEl = document.getElementById("chat");
 const hintEl = document.getElementById("hint");
 const langPillEl = document.getElementById("langPill");
 const btnReset = document.getElementById("btnReset");
 const btnBack = document.getElementById("btnBack");
 
+// ---------- Helpers ----------
 function t(obj) {
-  // Language selection node is bilingual by design, so fallback to vi
+  // Before language is set, we still allow bilingual content (fallback to vi)
   const lang = STATE.lang || "vi";
   if (typeof obj === "string") return obj;
-  return obj?.[lang] ?? obj?.vi ?? obj?.en ?? "";
+  if (!obj) return "";
+  return obj[lang] ?? obj.vi ?? obj.en ?? "";
 }
 
 function setLang(lang) {
@@ -485,6 +485,15 @@ function scrollToBottom() {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function addMessage(role, text, extraHtml = "") {
   const msg = document.createElement("div");
   msg.className = `msg ${role}`;
@@ -496,44 +505,18 @@ function addMessage(role, text, extraHtml = "") {
   scrollToBottom();
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function wrapToHtml(el) {
+  const tmp = document.createElement("div");
+  tmp.appendChild(el);
+  return tmp.innerHTML;
 }
 
-function renderNode(nodeId) {
-  const node = TREE.nodes[nodeId];
-  if (!node) {
-    addMessage("bot", STATE.lang === "vi"
-      ? "Không tìm thấy node. Vui lòng Reset."
-      : "Node not found. Please Reset."
-    );
-    return;
-  }
-
-  // Bot message (title + subtitle)
-  let header = t(node.title);
-  if (node.subtitle) header += `\n${t(node.subtitle)}`;
-
-  // Render bot bubble
-  if (node.type === "question") {
-    addMessage("bot", header, renderOptionsHtml(node.options));
-  } else if (node.type === "result") {
-    const cardsHtml = renderCardsHtml(node.cards || []);
-    const linksHtml = renderLinksHtml(node.links || []);
-    addMessage("bot", header, cardsHtml + linksHtml);
-  }
-}
-
+// ---------- Rendering ----------
 function renderOptionsHtml(options) {
   const wrap = document.createElement("div");
   wrap.className = "options";
 
-  options.forEach((opt, idx) => {
+  options.forEach((opt) => {
     const btn = document.createElement("button");
     btn.className = "opt";
     btn.type = "button";
@@ -549,6 +532,7 @@ function renderLinksHtml(links) {
   if (!links.length) return "";
   const div = document.createElement("div");
   div.className = "options";
+
   links.forEach((lk) => {
     const btn = document.createElement("button");
     btn.className = "opt";
@@ -557,6 +541,7 @@ function renderLinksHtml(links) {
     btn.addEventListener("click", () => gotoNode(lk.next, { asUser: false }));
     div.appendChild(btn);
   });
+
   return `<div class="divider"></div>${wrapToHtml(div)}`;
 }
 
@@ -564,59 +549,98 @@ function renderCardsHtml(cards) {
   if (!cards.length) return "";
   const container = document.createElement("div");
   container.className = "cards";
+
   cards.forEach((c) => {
     const card = document.createElement("div");
     card.className = "card";
+
     const h3 = document.createElement("h3");
     h3.textContent = t(c.title);
     card.appendChild(h3);
 
     const ul = document.createElement("ul");
-    (c.bullets ? t(c.bullets) : []).forEach((b) => {
+    const bullets = c.bullets ? t(c.bullets) : [];
+    (bullets || []).forEach((b) => {
       const li = document.createElement("li");
       li.textContent = b;
       ul.appendChild(li);
     });
     card.appendChild(ul);
+
     container.appendChild(card);
   });
+
   return wrapToHtml(container);
 }
 
-function wrapToHtml(el) {
-  const tmp = document.createElement("div");
-  tmp.appendChild(el);
-  return tmp.innerHTML;
+function renderNode(nodeId) {
+  const node = TREE.nodes[nodeId];
+
+  if (!node) {
+    addMessage("bot", STATE.lang === "vi"
+      ? "Có lỗi xảy ra (không tìm thấy node). Vui lòng bấm Reset."
+      : "Something went wrong (node not found). Please press Reset."
+    );
+    return;
+  }
+
+  // Safety: if lang is not set but node is not lang_select, force back
+  if (!STATE.lang && nodeId !== "lang_select") {
+    STATE.nodeId = "lang_select";
+    renderNode("lang_select");
+    return;
+  }
+
+  // Bot message (title + subtitle)
+  let header = t(node.title);
+  if (node.subtitle) header += `\n${t(node.subtitle)}`;
+
+  if (node.type === "question") {
+    addMessage("bot", header, renderOptionsHtml(node.options || []));
+  } else if (node.type === "result") {
+    const cardsHtml = renderCardsHtml(node.cards || []);
+    const linksHtml = renderLinksHtml(node.links || []);
+    addMessage("bot", header, cardsHtml + linksHtml);
+  } else {
+    addMessage("bot", STATE.lang === "vi"
+      ? "Có lỗi cấu hình node. Vui lòng Reset."
+      : "Node configuration error. Please Reset."
+    );
+  }
 }
 
 // ---------- Navigation / State ----------
-function snapshot() {
-  return { lang: STATE.lang, nodeId: STATE.nodeId };
-}
-
 function gotoNode(nextId, { asUser = true, userText = "" } = {}) {
-  // push history
-  STATE.history.push(snapshot());
+  // save previous state
+  STATE.history.push({ lang: STATE.lang, nodeId: STATE.nodeId });
 
   if (asUser && userText) addMessage("user", userText);
+
   STATE.nodeId = nextId;
   renderNode(nextId);
 }
 
 function onOptionSelected(opt) {
-  // language selector (special)
+  // ---- Language selection (FIXED) ----
   if (opt.setLang) {
-    // user message should reflect the chosen option, bilingual label ok
-    const chosenLabel = t(opt.label);
+    const chosenLabel = opt.setLang === "vi" ? "Tiếng Việt" : "English";
     addMessage("user", chosenLabel);
+
+    // 1) set language first
     setLang(opt.setLang);
-    STATE.history.push(snapshot());
+
+    // 2) move to next node
     STATE.nodeId = opt.next;
-    renderNode(opt.next);
+
+    // 3) record history AFTER language is set
+    STATE.history.push({ lang: STATE.lang, nodeId: STATE.nodeId });
+
+    // 4) render
+    renderNode(STATE.nodeId);
     return;
   }
 
-  // normal option
+  // ---- Normal option ----
   const userText = t(opt.label);
   gotoNode(opt.next, { asUser: true, userText });
 }
@@ -634,18 +658,18 @@ function resetAll() {
 function goBack() {
   const prev = STATE.history.pop();
   if (!prev) return;
-  // Hard reset chat to keep deterministic replay
-  // (simple & stable for MVP)
-  const keep = { ...prev };
+
+  // Simple deterministic back: clear transcript & re-render current node
   chatEl.innerHTML = "";
-  STATE.lang = keep.lang;
-  STATE.nodeId = keep.nodeId;
+  STATE.lang = prev.lang;
+  STATE.nodeId = prev.nodeId;
+
   if (STATE.lang) setLang(STATE.lang);
   else {
     langPillEl.textContent = "Not set";
     hintEl.textContent = "Select an option to continue. / Hãy chọn một lựa chọn để tiếp tục.";
   }
-  // Re-render current node only (not replaying full transcript for MVP)
+
   renderNode(STATE.nodeId);
 }
 
